@@ -1,0 +1,743 @@
+import { useState, useEffect, useRef } from "react";
+
+/* ════════════════════════════════════════════════
+   GLOBAL DESIGN TOKENS
+════════════════════════════════════════════════ */
+const T = {
+  primary: "#6C63FF",
+  logistics: "#2563EB",
+  secondary: "#26A69A",
+  success: "#10B981",
+  warning: "#F59E0B",
+  error: "#EF4444",
+  info: "#3B82F6",
+  bg: "#F8FAFC",
+  card: "#FFFFFF",
+  textPrimary: "#0F172A",
+  textSub: "#64748B",
+  divider: "#E2E8F0",
+  partner: "#26A69A",
+  driver: "#0D9488",
+  admin: "#7C3AED",
+};
+
+/* ════════════════════════════════════════════════
+   STATUS CONFIGS
+════════════════════════════════════════════════ */
+const serviceStatusCfg = {
+  pending_media: { label: "รอรูป", color: "#9E9E9E", bg: "#F5F5F5" },
+  dispatching: { label: "กำลังหาช่าง", color: "#FF7043", bg: "#FFF3F0" },
+  accepted: { label: "รับงานแล้ว", color: "#42A5F5", bg: "#E3F2FD" },
+  in_progress: { label: "กำลังทำงาน", color: "#FFA726", bg: "#FFF8E1" },
+  pending_completion: { label: "รอยืนยัน", color: "#66BB6A", bg: "#F1F8E9" },
+  completed: { label: "เสร็จแล้ว", color: "#26A69A", bg: "#E0F2F1" },
+  cancelled: { label: "ยกเลิก", color: "#EF5350", bg: "#FFEBEE" },
+  failed_dispatch: { label: "หาช่างไม่ได้", color: "#EF5350", bg: "#FFEBEE" },
+};
+
+const logisticsStatusCfg = {
+  pending: { label: "รอเข้ารับ", color: "#F59E0B", bg: "#FEF3C7" },
+  packing: { label: "กำลังจัดเรียง 3D", color: "#3B82F6", bg: "#EFF6FF" },
+  in_transit: { label: "กำลังขนส่ง", color: "#8B5CF6", bg: "#F5F3FF" },
+  delivered: { label: "ส่งสำเร็จ", color: "#10B981", bg: "#ECFDF5" },
+  cancelled: { label: "ยกเลิก", color: "#EF4444", bg: "#FEF2F2" },
+};
+
+/* ════════════════════════════════════════════════
+   MOCK DATA
+════════════════════════════════════════════════ */
+const mockTasks = [
+  { id: "abc-12345678", title: "ซ่อมท่อน้ำรั่ว ห้องครัว", status: "in_progress", category: "ประปา", partner: "สมศักดิ์ ช่างดี", price: 850 },
+  { id: "def-87654321", title: "ติดตั้งแอร์ 12000 BTU", status: "dispatching", category: "แอร์", partner: null, price: 1200 },
+  { id: "ghi-11223344", title: "ซ่อมไฟฟ้าวงจรหลัก", status: "accepted", category: "ไฟฟ้า", partner: "วิชัย อิเล็กทริค", price: 600 },
+  { id: "jkl-55667788", title: "ทาสีห้องนอน 3×4 ม.", status: "pending_completion", category: "ทาสี", partner: "สมพร เพ้นท์", price: 3500 },
+];
+
+const initMessages = [
+  { id: 1, role: "system", text: "✅ สร้างงานเรียบร้อย กำลังหาช่าง..." },
+  { id: 2, role: "system", text: "🔧 สมศักดิ์ ช่างดี รับงานแล้ว" },
+  { id: 3, role: "partner", text: "สวัสดีครับ กำลังเดินทางมาครับ อีกประมาณ 10 นาที", time: "10:32" },
+  { id: 4, role: "customer", text: "โอเคครับ รอนะ ประตูหน้าบ้านไม่ได้ล็อก", time: "10:33" },
+  { id: 5, role: "partner", text: "มาถึงแล้วครับ อยู่หน้าบ้านเลย", time: "10:45" },
+];
+
+const mockShipments = [
+  { id: "LOG-99210", title: "สินค้าพาเลทขนาดใหญ่ (คละไซส์)", status: "in_transit", weight: "450 kg", driver: "สมชาย ขนส่งดี", price: 2500, origin: "คลังบางนา", dest: "ชลบุรี" },
+  { id: "LOG-99211", title: "กล่องพัสดุรูปทรงอิสระ (Any-Load)", status: "packing", weight: "120 kg", driver: null, price: 1100, origin: "คลังบางบอน", dest: "นนทบุรี" },
+  { id: "LOG-99212", title: "สินค้าเครื่องจักรกลย่อย", status: "delivered", weight: "800 kg", driver: "วิชัย ไดร์เวอร์", price: 4200, origin: "ลาดกระบัง", dest: "ระยอง" },
+];
+
+/* ════════════════════════════════════════════════
+   SHARED COMPONENTS
+════════════════════════════════════════════════ */
+const StatusBadge = ({ status, type = "service" }) => {
+  const cfg = type === "service" ? serviceStatusCfg : logisticsStatusCfg;
+  const c = cfg[status] || Object.values(cfg)[0];
+  return (
+    <span
+      style={{ background: c.bg, color: c.color }}
+      className="px-2.5 py-1 rounded-full text-xs font-bold whitespace-nowrap"
+    >
+      {c.label}
+    </span>
+  );
+};
+
+const Avatar = ({ role, size = 32 }) => {
+  const m = {
+    customer: ["#6C63FF", "ล"],
+    partner: ["#26A69A", "ช"],
+    admin: ["#7C3AED", "A"],
+    driver: ["#0D9488", "ข"],
+  };
+  const [bg, lt] = m[role] || m.customer;
+  return (
+    <div
+      style={{ width: size, height: size, minWidth: size, background: bg }}
+      className="rounded-full flex items-center justify-center text-white font-bold text-xs select-none"
+    >
+      {lt}
+    </div>
+  );
+};
+
+const AppButton = ({ children, onClick, disabled, bg = T.primary, className = "" }) => (
+  <button
+    onClick={onClick}
+    disabled={disabled}
+    style={{ background: disabled ? "#CBD5E1" : bg }}
+    className={`w-full py-3 rounded-2xl text-white font-bold text-sm transition-all active:scale-95 shadow-sm ${className}`}
+  >
+    {children}
+  </button>
+);
+
+const Spinner = ({ color = "white" }) => (
+  <div
+    className="w-5 h-5 rounded-full border-2 border-t-transparent animate-spin"
+    style={{ borderColor: color, borderTopColor: "transparent" }}
+  />
+);
+
+/* ════════════════════════════════════════════════
+   ENTRY SCREEN
+════════════════════════════════════════════════ */
+const EntryScreen = ({ go }) => {
+  return (
+    <div className="h-full bg-gray-50 flex flex-col justify-center px-6 py-8">
+      <div className="max-w-sm mx-auto w-full">
+        <div className="text-center mb-8">
+          <div className="w-16 h-16 rounded-2xl flex items-center justify-center shadow-xl mx-auto mb-4 bg-gradient-to-br from-purple-500 to-blue-600 text-white text-3xl">
+            ⚡
+          </div>
+          <h1 className="text-2xl font-black mb-1" style={{ color: T.textPrimary }}>
+            Unified Ops
+          </h1>
+          <p className="text-xs" style={{ color: T.textSub }}>
+            ระบบงานบริการ + โลจิสติกส์ในแอปเดียว
+          </p>
+        </div>
+
+        <div className="space-y-4">
+          <button
+            onClick={() => go("service_login")}
+            className="w-full bg-white rounded-3xl p-5 border border-gray-200 shadow-sm text-left active:scale-95 transition"
+          >
+            <div className="flex items-center gap-4">
+              <div className="w-14 h-14 rounded-2xl bg-purple-100 flex items-center justify-center text-2xl">🔧</div>
+              <div>
+                <p className="font-black text-base" style={{ color: T.textPrimary }}>Service Ops</p>
+                <p className="text-xs" style={{ color: T.textSub }}>งานช่าง ซ่อม ติดตั้ง และติดตามสถานะ</p>
+              </div>
+            </div>
+          </button>
+
+          <button
+            onClick={() => go("logistics_login")}
+            className="w-full bg-white rounded-3xl p-5 border border-gray-200 shadow-sm text-left active:scale-95 transition"
+          >
+            <div className="flex items-center gap-4">
+              <div className="w-14 h-14 rounded-2xl bg-blue-100 flex items-center justify-center text-2xl">📦</div>
+              <div>
+                <p className="font-black text-base" style={{ color: T.textPrimary }}>Logistics Ops</p>
+                <p className="text-xs" style={{ color: T.textSub }}>ขนส่ง จัดเรียงสินค้า 3D และบริหารรถ</p>
+              </div>
+            </div>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ════════════════════════════════════════════════
+   SERVICE MODULE
+════════════════════════════════════════════════ */
+const ServiceLoginScreen = ({ go }) => {
+  const [loading, setLoading] = useState(false);
+
+  const doLogin = (dest) => {
+    setLoading(true);
+    setTimeout(() => {
+      setLoading(false);
+      go(dest);
+    }, 800);
+  };
+
+  return (
+    <div className="h-full overflow-y-auto bg-gray-50 flex flex-col justify-center px-6 py-8">
+      <div className="max-w-sm mx-auto w-full">
+        <button onClick={() => go("entry")} className="mb-4 text-sm text-gray-500">← กลับ</button>
+        <div className="text-center mb-6">
+          <div className="w-16 h-16 rounded-2xl flex items-center justify-center shadow-xl mx-auto mb-3 bg-gradient-to-br from-purple-500 to-fuchsia-600 text-white text-3xl">
+            🔧
+          </div>
+          <h1 className="text-2xl font-black" style={{ color: T.textPrimary }}>Unified Service</h1>
+          <p className="text-xs mt-1" style={{ color: T.textSub }}>ระบบจัดการงานบริการครบวงจร</p>
+        </div>
+
+        <div className="space-y-3">
+          <AppButton onClick={() => doLogin("customer_home")} disabled={loading}>
+            {loading ? "กำลังเข้าสู่ระบบ..." : "เข้าสู่ระบบ (ลูกค้า)"}
+          </AppButton>
+          <div className="flex gap-2">
+            <button
+              onClick={() => doLogin("partner_portal")}
+              className="flex-1 py-3 rounded-xl border-2 text-xs font-bold"
+              style={{ borderColor: T.partner, color: T.partner }}
+            >
+              🔧 โหมดช่าง
+            </button>
+            <button
+              onClick={() => doLogin("service_admin")}
+              className="flex-1 py-3 rounded-xl border-2 text-xs font-bold"
+              style={{ borderColor: "#EF5350", color: "#EF5350" }}
+            >
+              🛡️ Admin
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const CustomerHome = ({ go }) => {
+  const cats = [
+    { icon: "🔧", label: "ประปา" },
+    { icon: "⚡", label: "ไฟฟ้า" },
+    { icon: "❄️", label: "แอร์" },
+    { icon: "🪟", label: "ประตู" },
+    { icon: "🎨", label: "ทาสี" },
+    { icon: "🔩", label: "อื่นๆ" },
+  ];
+
+  return (
+    <div className="h-full flex flex-col overflow-hidden relative" style={{ background: T.bg }}>
+      <div className="bg-gradient-to-br from-purple-500 to-fuchsia-600 px-5 pt-10 pb-5 flex-shrink-0">
+        <div className="flex justify-between items-center mb-4">
+          <div>
+            <p className="text-white/70 text-xs">สวัสดี 👋</p>
+            <h2 className="text-white font-black text-xl">สมชาย วิทยา</h2>
+          </div>
+          <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center text-xl">👤</div>
+        </div>
+        <div className="bg-white rounded-xl px-3 py-2.5">🔍 <span className="text-sm text-gray-400">ค้นหาบริการ...</span></div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5 pb-20">
+        <div className="bg-gradient-to-br from-teal-500 to-emerald-700 rounded-2xl p-4 flex justify-between items-center shadow-md">
+          <div>
+            <p className="text-white font-black text-base">🔥 จองช่างเร่งด่วน</p>
+            <p className="text-white/70 text-xs mt-0.5 mb-3">ถ่ายรูปปัญหา → ได้ช่างใน 5 นาที</p>
+            <button
+              onClick={() => go("upload")}
+              className="bg-white text-teal-700 font-bold text-xs px-4 py-2 rounded-xl"
+            >
+              เริ่มเลย →
+            </button>
+          </div>
+          <span className="text-6xl">🔧</span>
+        </div>
+
+        <div>
+          <p className="font-black text-sm mb-3" style={{ color: T.textPrimary }}>หมวดหมู่บริการ</p>
+          <div className="grid grid-cols-3 gap-2">
+            {cats.map((c, i) => (
+              <button key={i} onClick={() => go("upload")} className="bg-white rounded-xl py-3 flex flex-col items-center gap-1 border border-gray-100 shadow-sm">
+                <span className="text-2xl">{c.icon}</span>
+                <span className="text-xs font-semibold">{c.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <div className="flex justify-between items-center mb-3">
+            <p className="font-black text-sm" style={{ color: T.textPrimary }}>งานของฉัน</p>
+          </div>
+          <div className="space-y-3">
+            {mockTasks.slice(0, 3).map((t) => (
+              <button
+                key={t.id}
+                onClick={() => go("task")}
+                className="w-full bg-white rounded-2xl p-4 border border-gray-100 shadow-sm text-left"
+              >
+                <div className="flex justify-between items-start mb-2">
+                  <StatusBadge status={t.status} type="service" />
+                  <span className="font-black" style={{ color: T.secondary }}>฿{t.price.toLocaleString()}</span>
+                </div>
+                <p className="font-bold text-sm truncate mb-1">{t.title}</p>
+                <div className="flex justify-between">
+                  <span className="text-xs text-gray-500">👤 {t.partner || "กำลังหาช่าง..."}</span>
+                  <span className="text-xs text-gray-400">#{t.id.slice(0, 8)}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <button
+        onClick={() => go("upload")}
+        style={{ background: T.primary }}
+        className="absolute bottom-20 right-4 flex items-center gap-2 px-4 py-3 rounded-full text-white font-bold text-sm shadow-xl"
+      >
+        <span>📷</span> สร้างงานใหม่
+      </button>
+    </div>
+  );
+};
+
+const UploadScreen = ({ go }) => {
+  const [imgs, setImgs] = useState([
+    { id: 1, url: "https://picsum.photos/200/200?random=10", ready: true },
+    { id: 2, url: "https://picsum.photos/200/200?random=11", ready: true },
+  ]);
+  const [desc, setDesc] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const addImg = () => {
+    const id = Date.now();
+    setLoading(true);
+    setImgs((p) => [...p, { id, url: `https://picsum.photos/200/200?random=${id}`, ready: false }]);
+    setTimeout(() => {
+      setImgs((p) => p.map((x) => (x.id === id ? { ...x, ready: true } : x)));
+      setLoading(false);
+    }, 1000);
+  };
+
+  return (
+    <div className="h-full flex flex-col" style={{ background: T.bg }}>
+      <div className="bg-white px-4 py-3 flex items-center gap-3 border-b border-gray-100">
+        <button onClick={() => go("customer_home")} className="text-xl text-gray-500">←</button>
+        <h2 className="font-black text-base">อัปโหลดรูปปัญหา</h2>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          {imgs.map((img) => (
+            <div key={img.id} className="bg-white rounded-2xl p-2 border border-gray-200 relative">
+              <img src={img.url} alt="" className="w-full h-32 object-cover rounded-xl" />
+              {!img.ready && (
+                <div className="absolute inset-0 bg-black/40 rounded-2xl flex items-center justify-center text-white text-xs">
+                  กำลังอัปโหลด...
+                </div>
+              )}
+            </div>
+          ))}
+          <button onClick={addImg} className="h-36 rounded-2xl border-2 border-dashed border-gray-300 bg-white text-sm font-bold text-gray-500">
+            + เพิ่มรูป
+          </button>
+        </div>
+
+        <div className="bg-white rounded-2xl p-4 border border-gray-200">
+          <p className="font-bold text-sm mb-2">รายละเอียดปัญหา</p>
+          <textarea
+            value={desc}
+            onChange={(e) => setDesc(e.target.value)}
+            rows={5}
+            placeholder="เช่น น้ำรั่วใต้ซิงก์ เปิดก๊อกแล้วหยดต่อเนื่อง..."
+            className="w-full outline-none text-sm resize-none"
+          />
+        </div>
+      </div>
+
+      <div className="p-4 bg-white border-t border-gray-100">
+        <AppButton onClick={() => go("task")} disabled={loading}>
+          {loading ? "กำลังอัปโหลด..." : "สร้างงานบริการ"}
+        </AppButton>
+      </div>
+    </div>
+  );
+};
+
+const TaskDetailScreen = ({ go }) => (
+  <div className="h-full flex flex-col bg-gray-50">
+    <div className="bg-white px-4 py-3 flex items-center gap-3 border-b border-gray-100">
+      <button onClick={() => go("customer_home")} className="text-xl text-gray-500">←</button>
+      <h2 className="font-black text-base">รายละเอียดงาน</h2>
+    </div>
+    <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="bg-white rounded-2xl p-4 border border-gray-100">
+        <div className="flex justify-between mb-3">
+          <StatusBadge status="in_progress" type="service" />
+          <span className="font-black text-teal-600">฿850</span>
+        </div>
+        <p className="font-bold">ซ่อมท่อน้ำรั่ว ห้องครัว</p>
+        <p className="text-sm text-gray-500 mt-2">ช่างผู้รับงาน: สมศักดิ์ ช่างดี</p>
+      </div>
+      <AppButton onClick={() => go("chat")} bg={T.secondary}>เปิดแชทกับช่าง</AppButton>
+    </div>
+  </div>
+);
+
+const ChatScreen = ({ go }) => {
+  const [msgs, setMsgs] = useState(initMessages);
+  const [text, setText] = useState("");
+  const bottomRef = useRef(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [msgs]);
+
+  const send = () => {
+    if (!text.trim()) return;
+    setMsgs((p) => [...p, { id: Date.now(), role: "customer", text, time: "11:10" }]);
+    setText("");
+  };
+
+  return (
+    <div className="h-full flex flex-col bg-gray-50">
+      <div className="bg-white px-4 py-3 flex items-center gap-3 border-b border-gray-100">
+        <button onClick={() => go("task")} className="text-xl text-gray-500">←</button>
+        <Avatar role="partner" />
+        <div>
+          <p className="font-black text-sm">สมศักดิ์ ช่างดี</p>
+          <p className="text-xs text-gray-400">ออนไลน์</p>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {msgs.map((m) =>
+          m.role === "system" ? (
+            <div key={m.id} className="text-center text-xs text-gray-400">{m.text}</div>
+          ) : (
+            <div key={m.id} className={`flex ${m.role === "customer" ? "justify-end" : "justify-start"}`}>
+              <div className={`max-w-[75%] rounded-2xl px-3 py-2 text-sm ${m.role === "customer" ? "bg-purple-600 text-white" : "bg-white border border-gray-200 text-gray-800"}`}>
+                {m.text}
+                <div className={`text-[10px] mt-1 ${m.role === "customer" ? "text-white/70" : "text-gray-400"}`}>{m.time}</div>
+              </div>
+            </div>
+          )
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      <div className="p-3 bg-white border-t border-gray-100 flex gap-2">
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="พิมพ์ข้อความ..."
+          className="flex-1 bg-gray-100 rounded-xl px-3 py-2 text-sm outline-none"
+        />
+        <button onClick={send} className="px-4 rounded-xl bg-purple-600 text-white font-bold">ส่ง</button>
+      </div>
+    </div>
+  );
+};
+
+const PartnerScreen = ({ go }) => (
+  <div className="h-full flex flex-col bg-teal-950 text-white">
+    <div className="px-5 pt-10 pb-5 bg-gradient-to-br from-teal-600 to-emerald-700">
+      <p className="text-white/70 text-xs">โหมดช่าง 🔧</p>
+      <h2 className="font-black text-xl">สมศักดิ์ ช่างดี</h2>
+    </div>
+    <div className="flex-1 p-4">
+      <div className="bg-white/10 rounded-2xl p-4 border border-white/10">
+        <p className="font-bold">งานที่กำลังทำ</p>
+        <p className="text-sm text-white/80 mt-2">ซ่อมท่อน้ำรั่ว ห้องครัว</p>
+      </div>
+    </div>
+    <div className="p-4 border-t border-white/10">
+      <AppButton onClick={() => go("service_login")} bg="#334155">ออกจากระบบช่าง</AppButton>
+    </div>
+  </div>
+);
+
+const ServiceAdminScreen = ({ go }) => (
+  <div className="h-full flex flex-col bg-rose-950 text-white">
+    <div className="px-4 py-3 bg-rose-900 border-b border-rose-800 flex justify-between">
+      <span className="font-black text-sm">🛡️ Service Admin</span>
+      <button onClick={() => go("service_login")} className="text-xs bg-white/10 px-3 py-1 rounded">ออก</button>
+    </div>
+    <div className="flex-1 p-4 space-y-4">
+      <div className="grid grid-cols-2 gap-3">
+        <div className="bg-white/10 p-4 rounded-xl">
+          <p className="text-xs text-white/60">งานวันนี้</p>
+          <p className="text-2xl font-black">24</p>
+        </div>
+        <div className="bg-white/10 p-4 rounded-xl">
+          <p className="text-xs text-white/60">ช่างออนไลน์</p>
+          <p className="text-2xl font-black">11</p>
+        </div>
+      </div>
+    </div>
+  </div>
+);
+
+/* ════════════════════════════════════════════════
+   LOGISTICS MODULE
+════════════════════════════════════════════════ */
+const LogisticsLoginScreen = ({ go }) => {
+  const [loading, setLoading] = useState(false);
+
+  const handleLogin = (role) => {
+    setLoading(true);
+    setTimeout(() => {
+      setLoading(false);
+      if (role === "driver") go("driver");
+      else if (role === "admin") go("logistics_admin");
+      else go("dashboard");
+    }, 800);
+  };
+
+  return (
+    <div className="h-full overflow-y-auto bg-gray-50 flex flex-col justify-center px-6 py-8">
+      <div className="max-w-sm mx-auto w-full text-center">
+        <button onClick={() => go("entry")} className="mb-4 text-sm text-gray-500 text-left w-full">← กลับ</button>
+        <div className="bg-gradient-to-br from-blue-600 to-blue-800 w-16 h-16 rounded-2xl flex items-center justify-center shadow-xl mx-auto mb-4 text-3xl text-white">
+          📦
+        </div>
+        <h1 className="text-2xl font-black mb-1" style={{ color: T.textPrimary }}>Any-Load Logistics</h1>
+        <p className="text-xs mb-6" style={{ color: T.textSub }}>ระบบจัดการขนส่งและคำนวณการจัดเรียงสินค้า 3 มิติ</p>
+
+        <div className="space-y-3">
+          <AppButton onClick={() => handleLogin("dashboard")} disabled={loading} bg={T.logistics}>
+            {loading ? "กำลังเข้าระบบ..." : "เข้าสู่ระบบ (ลูกค้า / ผู้ส่ง)"}
+          </AppButton>
+          <div className="flex gap-2 pt-2">
+            <button onClick={() => handleLogin("driver")} className="flex-1 py-3 rounded-xl border-2 font-bold text-xs" style={{ borderColor: T.driver, color: T.driver }}>
+              🚚 โหมดคนขับรถ
+            </button>
+            <button onClick={() => handleLogin("admin")} className="flex-1 py-3 rounded-xl border-2 font-bold text-xs" style={{ borderColor: T.admin, color: T.admin }}>
+              🛡️ แอดมิน / WMS
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const ShipperDashboard = ({ go }) => (
+  <div className="h-full flex flex-col" style={{ background: T.bg }}>
+    <div className="bg-gradient-to-br from-blue-600 to-blue-800 px-5 pt-10 pb-5 text-white">
+      <div className="flex justify-between items-center mb-4">
+        <div>
+          <p className="text-white/70 text-xs">ยินดีต้อนรับผู้ส่งสินค้า 👋</p>
+          <h2 className="font-black text-xl">Kaset IT KML Co., Ltd.</h2>
+        </div>
+        <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center text-lg">🏢</div>
+      </div>
+      <div className="bg-white/10 rounded-2xl p-3 flex justify-between items-center">
+        <div>
+          <p className="text-white/70 text-xs">งานขนส่งที่กำลังดำเนินการ</p>
+          <p className="text-xl font-black">3 รายการ</p>
+        </div>
+        <button onClick={() => go("packing3d")} className="bg-white text-blue-600 px-3 py-2 rounded-xl text-xs font-bold shadow">
+          📦 จัดเรียง 3D
+        </button>
+      </div>
+    </div>
+
+    <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="flex justify-between items-center">
+        <p className="font-black text-sm" style={{ color: T.textPrimary }}>รายการขนส่งล่าสุด</p>
+        <button onClick={() => go("packing3d")} className="text-xs font-bold text-blue-600">+ สร้างงานขนส่ง</button>
+      </div>
+
+      <div className="space-y-3">
+        {mockShipments.map((s) => (
+          <div key={s.id} className="bg-white rounded-2xl p-4 border border-gray-100 shadow-sm">
+            <div className="flex justify-between items-start mb-2">
+              <span className="text-xs font-mono font-bold text-gray-400">#{s.id}</span>
+              <StatusBadge status={s.status} type="logistics" />
+            </div>
+            <p className="font-bold text-sm mb-1">{s.title}</p>
+            <div className="text-xs space-y-1 mb-3 text-gray-500">
+              <p>📍 จาก: {s.origin} ➔ ไปยัง: {s.dest}</p>
+              <p>⚖️ น้ำหนัก: {s.weight} | คนขับ: {s.driver || "กำลังจัดสรรรถ..."}</p>
+            </div>
+            <div className="flex justify-between items-center pt-2 border-t border-gray-100">
+              <span className="font-black text-base text-blue-600">฿{s.price.toLocaleString()}</span>
+              <button onClick={() => go("packing3d")} className="text-xs bg-gray-100 px-3 py-1.5 rounded-lg font-bold">
+                ดูรายละเอียด
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+
+    <div className="p-4 bg-white border-t border-gray-100">
+      <AppButton onClick={() => go("packing3d")} bg={T.logistics}>
+        🚀 คำนวณพื้นที่และจัดส่งสินค้า
+      </AppButton>
+    </div>
+  </div>
+);
+
+const Packing3DScreen = ({ go }) => {
+  const [optimized, setOptimized] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const runOptimization = () => {
+    setLoading(true);
+    setTimeout(() => {
+      setLoading(false);
+      setOptimized(true);
+    }, 1200);
+  };
+
+  return (
+    <div className="h-full flex flex-col bg-gray-900 text-white">
+      <div className="px-4 py-3 flex items-center gap-3 border-b border-gray-800">
+        <button onClick={() => go("dashboard")} className="text-xl text-gray-400">←</button>
+        <h2 className="font-black text-base">Any-Load: ระบบจัดเรียง 3D</h2>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="bg-gray-800 rounded-2xl p-4 border border-gray-700 text-center py-10">
+          {loading ? (
+            <div className="space-y-3">
+              <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto" />
+              <p className="text-xs text-gray-400">AI กำลังคำนวณการจัดเรียงพื้นที่...</p>
+            </div>
+          ) : optimized ? (
+            <div className="space-y-2">
+              <span className="text-5xl">📦📐</span>
+              <p className="font-bold text-green-400 text-base">คำนวณสำเร็จ! ใช้พื้นที่ตู้ 88.5%</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <span className="text-5xl">🚛</span>
+              <p className="font-bold text-sm">พร้อมคำนวณสินค้าทรงอิสระ</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="p-4 bg-gray-900 border-t border-gray-800">
+        {!optimized ? (
+          <AppButton onClick={runOptimization} disabled={loading} bg={T.logistics}>
+            {loading ? "กำลังประมวลผล..." : "คำนวณการจัดเรียง 3D ทันที"}
+          </AppButton>
+        ) : (
+          <AppButton onClick={() => go("dashboard")} bg={T.success}>
+            ยืนยันการจัดส่งและเรียกรถขนส่ง ✓
+          </AppButton>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const DriverScreen = ({ go }) => (
+  <div className="h-full flex flex-col bg-gray-900 text-white">
+    <div className="bg-gradient-to-br from-teal-600 to-teal-800 px-5 pt-10 pb-5">
+      <div className="flex justify-between items-center mb-2">
+        <div>
+          <p className="text-white/70 text-xs">โหมดคนขับรถขนส่ง 🚚</p>
+          <h2 className="font-black text-xl">สมชาย ขนส่งดี</h2>
+        </div>
+        <span className="px-3 py-1 bg-green-500 rounded-full text-xs font-bold">ออนไลน์</span>
+      </div>
+    </div>
+    <div className="flex-1 overflow-y-auto p-4">
+      <div className="bg-gray-800 rounded-2xl p-4 border border-gray-700 space-y-3">
+        <div className="flex justify-between items-center">
+          <span className="text-xs font-mono text-blue-400">#LOG-99210</span>
+          <span className="text-xs px-2 py-0.5 bg-purple-900 text-purple-300 rounded">กำลังขนส่ง</span>
+        </div>
+        <p className="font-bold text-sm">สินค้าพาเลทขนาดใหญ่ (คละไซส์)</p>
+        <div className="text-xs text-gray-400 space-y-1">
+          <p>📍 จุดรับ: คลังบางนา ➔ ปลายทาง: ชลบุรี</p>
+          <p>💰 ค่ารอบขนส่ง: ฿2,500</p>
+        </div>
+      </div>
+    </div>
+    <div className="p-4 border-t border-gray-800">
+      <AppButton onClick={() => go("logistics_login")} bg="#374151">ออกจากระบบคนขับ</AppButton>
+    </div>
+  </div>
+);
+
+const AdminLogisticsDash = ({ go }) => (
+  <div className="h-full flex flex-col bg-gray-900 text-white">
+    <div className="px-4 py-3 bg-gray-800 border-b border-gray-700 flex justify-between items-center">
+      <span className="font-black text-sm">🛡️ WMS & Logistics Admin</span>
+      <button onClick={() => go("logistics_login")} className="text-xs px-2.5 py-1 bg-gray-700 rounded">ออก</button>
+    </div>
+    <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="grid grid-cols-2 gap-3">
+        <div className="bg-gray-800 p-3 rounded-xl border border-gray-700">
+          <p className="text-xs text-gray-400">งานขนส่งวันนี้</p>
+          <p className="text-2xl font-black text-blue-400">48 เที่ยว</p>
+        </div>
+        <div className="bg-gray-800 p-3 rounded-xl border border-gray-700">
+          <p className="text-xs text-gray-400">อัตราการใช้พื้นที่ 3D</p>
+          <p className="text-2xl font-black text-green-400">84.2%</p>
+        </div>
+      </div>
+    </div>
+  </div>
+);
+
+/* ════════════════════════════════════════════════
+   MAIN APP
+════════════════════════════════════════════════ */
+export default function App() {
+  const [screen, setScreen] = useState("entry");
+
+  const renderScreen = () => {
+    switch (screen) {
+      case "entry": return <EntryScreen go={setScreen} />;
+
+      case "service_login": return <ServiceLoginScreen go={setScreen} />;
+      case "customer_home": return <CustomerHome go={setScreen} />;
+      case "upload": return <UploadScreen go={setScreen} />;
+      case "task": return <TaskDetailScreen go={setScreen} />;
+      case "chat": return <ChatScreen go={setScreen} />;
+      case "partner_portal": return <PartnerScreen go={setScreen} />;
+      case "service_admin": return <ServiceAdminScreen go={setScreen} />;
+
+      case "logistics_login": return <LogisticsLoginScreen go={setScreen} />;
+      case "dashboard": return <ShipperDashboard go={setScreen} />;
+      case "packing3d": return <Packing3DScreen go={setScreen} />;
+      case "driver": return <DriverScreen go={setScreen} />;
+      case "logistics_admin": return <AdminLogisticsDash go={setScreen} />;
+
+      default: return <EntryScreen go={setScreen} />;
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-950 flex items-center justify-center p-0 sm:p-4">
+      <div className="w-full sm:max-w-md h-screen sm:h-[840px] bg-white sm:rounded-[40px] sm:shadow-2xl overflow-hidden relative flex flex-col border border-gray-200">
+        <div className="flex-1 overflow-hidden relative">
+          {renderScreen()}
+        </div>
+
+        <div className="bg-black text-gray-400 px-4 py-2 flex justify-between items-center text-xs flex-shrink-0 border-t border-gray-800">
+          <span>⚡ Unified Ops: {screen.toUpperCase()}</span>
+          <div className="flex gap-2">
+            <button onClick={() => setScreen("customer_home")} className="underline">Service</button>
+            <button onClick={() => setScreen("dashboard")} className="underline">Logistics</button>
+            <button onClick={() => setScreen("entry")} className="underline">Home</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
